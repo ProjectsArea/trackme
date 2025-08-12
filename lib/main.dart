@@ -12,9 +12,14 @@ import 'package:google_places_flutter/google_places_flutter.dart';
 import 'package:google_places_flutter/model/prediction.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'splash_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   await _initializeBackgroundService();
   await _initializeNotifications();
   runApp(const MyApp());
@@ -103,7 +108,7 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const MyHomePage(title: 'TrackMe'),
+      home: const SplashScreen(),
     );
   }
 }
@@ -1022,7 +1027,7 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                       ),
                       const SizedBox(width: 16),
                       Expanded(
-                        child: Column(
+        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -1035,7 +1040,7 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text(
+            Text(
                               _destinationController.text,
                               style: const TextStyle(
                                 fontSize: 18,
@@ -1057,10 +1062,10 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                           icon: const Icon(Icons.close, color: Colors.red),
                           onPressed: _stopNavigation,
                         ),
-                      ),
-                    ],
-                  ),
-                ),
+            ),
+          ],
+        ),
+      ),
               ),
             ),
           

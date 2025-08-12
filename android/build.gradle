@@ -1,3 +1,18 @@
+buildscript {
+    ext.kotlin_version = '2.0.21' // Compatible with current Firebase libs
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2' // NEW AGP version
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath 'com.google.gms:google-services:4.4.2'
+    }
+}
+
+
 allprojects {
     repositories {
         google()
