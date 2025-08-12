@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,11 +17,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   int _activeUsers = 0;
   int _verifiedUsers = 0;
   List<Map<String, dynamic>> _recentUsers = [];
+  // Live sessions cache to prevent flicker
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _liveLastDocs = [];
+  bool _liveInitialLoaded = false;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _liveSub;
 
   @override
   void initState() {
     super.initState();
     _loadAdminData();
+    _seedLiveSessionsAndSubscribe();
   }
 
   Future<void> _loadAdminData() async {
@@ -76,6 +82,54 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         (route) => false,
       );
     }
+  }
+
+  void _seedLiveSessionsAndSubscribe() {
+    // One-time seed to avoid initial empty flicker
+    FirebaseFirestore.instance
+        .collection('navigation_sessions')
+        .where('status', isEqualTo: 'active')
+        .orderBy('startedAt', descending: true)
+        .limit(25)
+        .get()
+        .then((snap) {
+      if (!mounted) return;
+      setState(() {
+        _liveLastDocs = snap.docs;
+        _liveInitialLoaded = true;
+      });
+    }).catchError((_) {
+      if (!mounted) return;
+      setState(() => _liveInitialLoaded = true);
+    });
+
+    // Subscribe to live updates, but only overwrite with non-empty to avoid flicker
+    _liveSub = FirebaseFirestore.instance
+        .collection('navigation_sessions')
+        .where('status', isEqualTo: 'active')
+        .orderBy('startedAt', descending: true)
+        .limit(25)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      setState(() {
+        if (snap.docs.isNotEmpty) {
+          _liveLastDocs = snap.docs;
+        } else {
+          // Keep previous non-empty to avoid UI flashing to empty
+        }
+        _liveInitialLoaded = true;
+      });
+    }, onError: (_) {
+      if (!mounted) return;
+      setState(() => _liveInitialLoaded = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _liveSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -562,40 +616,30 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           ),
           const SizedBox(height: 16),
 
-          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('navigation_sessions')
-                .where('status', isEqualTo: 'active')
-                .orderBy('startedAt', descending: true)
-                .limit(25)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Center(child: CircularProgressIndicator()),
-                );
-              }
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Center(
-                    child: Text(
-                      'No active sessions',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
-                );
-              }
-
-              return ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: snapshot.data!.docs.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (context, index) {
-                  final doc = snapshot.data!.docs[index];
-                  final data = doc.data();
+          if (!_liveInitialLoaded)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_liveLastDocs.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(
+                child: Text(
+                  'No active sessions',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _liveLastDocs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final doc = _liveLastDocs[index];
+                final data = doc.data();
                   final userId = data['userId'] as String?;
                   final purpose = (data['purpose'] ?? '') as String;
                   final startedAt = (data['startedAt'] as Timestamp?)?.toDate();
@@ -743,10 +787,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       ],////////////////////////////////
                     ),
                   ));
-                },
-              );
-            },
-          ),
+              },
+            ),
         ],
       ),
     );
