@@ -23,6 +23,7 @@ class AdminTripDetailScreen extends StatelessWidget {
           final origin = (data['origin'] ?? {}) as Map<String, dynamic>;
           final destination = (data['destination'] ?? {}) as Map<String, dynamic>;
           final lastLocation = (data['lastLocation'] ?? {}) as Map<String, dynamic>;
+          final List<dynamic> routePointsRaw = (data['routePolylinePoints'] as List?) ?? const [];
           final purpose = (data['purpose'] ?? '') as String;
           final status = (data['status'] ?? 'active') as String;
           final startedAt = (data['startedAt'] as Timestamp?)?.toDate();
@@ -37,16 +38,44 @@ class AdminTripDetailScreen extends StatelessWidget {
           final lastLatLng = (lastLocation['lat'] != null && lastLocation['lng'] != null)
               ? LatLng((lastLocation['lat'] as num).toDouble(), (lastLocation['lng'] as num).toDouble())
               : null;
+          final routePoints = routePointsRaw
+              .map((e) => e is Map<String, dynamic>
+                  ? LatLng((e['lat'] as num?)?.toDouble() ?? double.nan, (e['lng'] as num?)?.toDouble() ?? double.nan)
+                  : null)
+              .whereType<LatLng>()
+              .where((p) => !(p.latitude.isNaN || p.longitude.isNaN))
+              .toList();
 
+          // Build polylines from stored route points
+          final polylines = <Polyline>{};
+          if (routePoints.length > 1) {
+            polylines.add(
+              Polyline(
+                polylineId: const PolylineId('route'),
+                points: routePoints,
+                color: Colors.blue,
+                width: 5,
+              ),
+            );
+          }
+
+          // Compute bounds: prefer route points if available
+          final List<LatLng> pointsForBounds = routePoints.isNotEmpty
+              ? routePoints
+              : [originLatLng, destLatLng, if (lastLatLng != null) lastLatLng];
+          double minLat = pointsForBounds.first.latitude;
+          double maxLat = pointsForBounds.first.latitude;
+          double minLng = pointsForBounds.first.longitude;
+          double maxLng = pointsForBounds.first.longitude;
+          for (final p in pointsForBounds) {
+            if (p.latitude < minLat) minLat = p.latitude;
+            if (p.latitude > maxLat) maxLat = p.latitude;
+            if (p.longitude < minLng) minLng = p.longitude;
+            if (p.longitude > maxLng) maxLng = p.longitude;
+          }
           final bounds = LatLngBounds(
-            southwest: LatLng(
-              (originLatLng.latitude <= destLatLng.latitude ? originLatLng.latitude : destLatLng.latitude),
-              (originLatLng.longitude <= destLatLng.longitude ? originLatLng.longitude : destLatLng.longitude),
-            ),
-            northeast: LatLng(
-              (originLatLng.latitude >= destLatLng.latitude ? originLatLng.latitude : destLatLng.latitude),
-              (originLatLng.longitude >= destLatLng.longitude ? originLatLng.longitude : destLatLng.longitude),
-            ),
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
           );
 
           final markers = <Marker>{
@@ -84,6 +113,7 @@ class AdminTripDetailScreen extends StatelessWidget {
                   child: GoogleMap(
                     initialCameraPosition: CameraPosition(target: originLatLng, zoom: 12),
                     markers: markers,
+                    polylines: polylines,
                     onMapCreated: (c) {
                       c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
                     },

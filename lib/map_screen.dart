@@ -16,6 +16,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'auth/login_screen.dart';
 import 'profile/profile_screen.dart';
+import 'feedback/visit_feedback_list_screen.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -40,6 +41,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _isBackgroundServiceRunning = false;
   String _navigationPurpose = '';
   String? _activeSessionId;
+  String? _lastEncodedPolyline;
   
   final TextEditingController _originController = TextEditingController();
   final TextEditingController _destinationController = TextEditingController();
@@ -304,6 +306,12 @@ class _MapScreenState extends State<MapScreen> {
         // Use the first (fastest) route
         final points = data['routes'][0]['overview_polyline']['points'];
         final route = _decodePolyline(points);
+        _lastEncodedPolyline = points;
+        // Persist route polyline to Firestore if a session is active
+        if (_activeSessionId != null) {
+          // ignore: unawaited_futures
+          _saveRouteToFirestore(points, route);
+        }
         
         // Add destination marker if not already present
         setState(() {
@@ -359,6 +367,27 @@ class _MapScreenState extends State<MapScreen> {
       poly.add(p);
     }
     return poly;
+  }
+
+  Future<void> _saveRouteToFirestore(String encoded, List<LatLng> points) async {
+    if (_activeSessionId == null) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('navigation_sessions')
+          .doc(_activeSessionId)
+          .update({
+        'routePolylineEncoded': encoded,
+        'routePolylinePoints': points
+            .map((p) => {
+                  'lat': p.latitude,
+                  'lng': p.longitude,
+                })
+            .toList(),
+        'routeUpdatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      // ignore Firestore write errors to not affect UX
+    }
   }
 
   Future<String> _getCurrentLocationAddress(LatLng location) async {
@@ -577,6 +606,11 @@ class _MapScreenState extends State<MapScreen> {
                 'status': 'active',
               });
               _activeSessionId = sessionRef.id;
+              // Save initial route polyline for this session if available
+              if (_lastEncodedPolyline != null && _routePoints.isNotEmpty) {
+                // ignore: unawaited_futures
+                _saveRouteToFirestore(_lastEncodedPolyline!, _routePoints);
+              }
             }
           } catch (e) {
             // ignore errors so navigation continues
@@ -743,6 +777,15 @@ class _MapScreenState extends State<MapScreen> {
         backgroundColor: Colors.deepPurple,
         elevation: 0,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.feedback, color: Colors.white),
+            tooltip: 'Visit Feedback',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const VisitFeedbackListScreen()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.person, color: Colors.white),
             onPressed: () {

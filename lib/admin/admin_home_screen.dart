@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/login_screen.dart';
 import 'admin_user_trips_screen.dart';
+import 'admin_feedback_screen.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -524,12 +525,14 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       const SizedBox(width: 16),
                       Expanded(
                         child: _buildActionCard(
-                          'Analytics',
-                          Icons.analytics_outlined,
-                          Colors.green,
-                          () {
-                            // TODO: Navigate to analytics screen
-                          },
+                           'Feedback',
+                           Icons.rate_review_outlined,
+                           Colors.green,
+                           () {
+                             Navigator.of(context).push(
+                               MaterialPageRoute(builder: (_) => const AdminFeedbackScreen()),
+                             );
+                           },
                         ),
                       ),
                     ],
