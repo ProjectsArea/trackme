@@ -23,7 +23,10 @@ class AdminTripDetailScreen extends StatelessWidget {
           final origin = (data['origin'] ?? {}) as Map<String, dynamic>;
           final destination = (data['destination'] ?? {}) as Map<String, dynamic>;
           final lastLocation = (data['lastLocation'] ?? {}) as Map<String, dynamic>;
-          final List<dynamic> routePointsRaw = (data['routePolylinePoints'] as List?) ?? const [];
+          final List<dynamic> routePointsRaw =
+              (data['routePolylinePointsInitial'] as List?) ??
+              (data['routePolylinePoints'] as List?) ??
+              const [];
           final purpose = (data['purpose'] ?? '') as String;
           final status = (data['status'] ?? 'active') as String;
           final startedAt = (data['startedAt'] as Timestamp?)?.toDate();
@@ -46,16 +49,65 @@ class AdminTripDetailScreen extends StatelessWidget {
               .where((p) => !(p.latitude.isNaN || p.longitude.isNaN))
               .toList();
 
-          // Build polylines from stored route points
+          // Build polylines from stored planned route points
           final polylines = <Polyline>{};
           if (routePoints.length > 1) {
             polylines.add(
               Polyline(
-                polylineId: const PolylineId('route'),
+                polylineId: const PolylineId('planned_route'),
                 points: routePoints,
                 color: Colors.blue,
                 width: 5,
               ),
+            );
+          }
+
+          // Load actual travelled points (if any) from subcollection and render as separate polyline
+          // Note: We use a StreamBuilder nested to avoid disturbing existing functionality
+          Widget mapWidget(Set<Marker> markers, LatLngBounds bounds) {
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('navigation_sessions')
+                  .doc(sessionId)
+                  .collection('route_points')
+                  .orderBy('recordedAt')
+                  .snapshots(),
+              builder: (context, routeSnap) {
+                final polylinesLocal = Set<Polyline>.from(polylines);
+                if (routeSnap.hasData && routeSnap.data!.docs.length > 1) {
+                  final actual = routeSnap.data!.docs
+                      .map((d) {
+                        final m = d.data();
+                        final lat = (m['lat'] as num?)?.toDouble();
+                        final lng = (m['lng'] as num?)?.toDouble();
+                        if (lat == null || lng == null) return null;
+                        return LatLng(lat, lng);
+                      })
+                      .whereType<LatLng>()
+                      .toList();
+                  if (actual.length > 1) {
+                    polylinesLocal.add(
+                      Polyline(
+                        polylineId: const PolylineId('actual_route'),
+                        points: actual,
+                        color: Colors.red,
+                        width: 4,
+                      ),
+                    );
+                  }
+                }
+
+                return GoogleMap(
+                  initialCameraPosition: CameraPosition(target: originLatLng, zoom: 12),
+                  markers: markers,
+                  polylines: polylinesLocal,
+                  onMapCreated: (c) {
+                    c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
+                  },
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                );
+              },
             );
           }
 
@@ -110,16 +162,7 @@ class AdminTripDetailScreen extends StatelessWidget {
                 // Map preview
                 SizedBox(
                   height: 260,
-                  child: GoogleMap(
-                    initialCameraPosition: CameraPosition(target: originLatLng, zoom: 12),
-                    markers: markers,
-                    polylines: polylines,
-                    onMapCreated: (c) {
-                      c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
-                    },
-                    myLocationButtonEnabled: false,
-                    zoomControlsEnabled: false,
-                  ),
+                  child: mapWidget(markers, bounds),
                 ),
                 const SizedBox(height: 12),
                 Padding(

@@ -32,6 +32,7 @@ class _MapScreenState extends State<MapScreen> {
   final List<LatLng> _breadcrumbs = [];
   
   location_pkg.LocationData? _currentLocation;
+  final location_pkg.Location _location = location_pkg.Location();
   LatLng? _destinationLatLng;
   LatLng? _originLatLng;
   List<LatLng> _routePoints = [];
@@ -42,6 +43,8 @@ class _MapScreenState extends State<MapScreen> {
   String _navigationPurpose = '';
   String? _activeSessionId;
   String? _lastEncodedPolyline;
+  LatLng? _lastSavedActualPoint;
+  DateTime? _lastSavedActualPointAt;
   
   final TextEditingController _originController = TextEditingController();
   final TextEditingController _destinationController = TextEditingController();
@@ -179,12 +182,11 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _ensurePermissions() async {
-    final location = location_pkg.Location();
     
     // Request location service
-    bool serviceEnabled = await location.serviceEnabled();
+    bool serviceEnabled = await _location.serviceEnabled();
     if (!serviceEnabled) {
-      serviceEnabled = await location.requestService();
+      serviceEnabled = await _location.requestService();
       if (!serviceEnabled) return;
     }
     
@@ -194,19 +196,25 @@ class _MapScreenState extends State<MapScreen> {
     }
     
     // Request location permissions
-    location_pkg.PermissionStatus permissionStatus = await location.hasPermission();
+    location_pkg.PermissionStatus permissionStatus = await _location.hasPermission();
     if (permissionStatus == location_pkg.PermissionStatus.denied) {
-      permissionStatus = await location.requestPermission();
+      permissionStatus = await _location.requestPermission();
       if (permissionStatus != location_pkg.PermissionStatus.granted) {
         return;
       }
     }
+    // Request background permission as well (Android Q+ / iOS Always)
+    await Permission.locationAlways.request();
+    // Start with background mode disabled; we'll enable it when navigation starts
+    try {
+      await _location.enableBackgroundMode(enable: false);
+    } catch (_) {}
     
     // Start location updates
-    _locationSubscription = location.onLocationChanged.listen(_onNewPosition);
+    _locationSubscription = _location.onLocationChanged.listen(_onNewPosition);
   }
 
-  void _onNewPosition(location_pkg.LocationData position) {
+  Future<void> _onNewPosition(location_pkg.LocationData position) async {
     final newLocation = LatLng(position.latitude!, position.longitude!);
     
     setState(() {
@@ -250,6 +258,30 @@ class _MapScreenState extends State<MapScreen> {
           });
         } catch (e) {
           // ignore errors to not disturb navigation UX
+        }
+
+        // Persist actual travelled path to a subcollection with light throttling
+        try {
+          final currentLatLng = LatLng(position.latitude!, position.longitude!);
+          final shouldSavePoint = _lastSavedActualPoint == null ||
+              _calculateDistance(currentLatLng, _lastSavedActualPoint!) > 25 ||
+              (_lastSavedActualPointAt == null ||
+                  DateTime.now().difference(_lastSavedActualPointAt!).inSeconds > 20);
+          if (shouldSavePoint) {
+            await FirebaseFirestore.instance
+                .collection('navigation_sessions')
+                .doc(_activeSessionId)
+                .collection('route_points')
+                .add({
+              'lat': position.latitude,
+              'lng': position.longitude,
+              'recordedAt': FieldValue.serverTimestamp(),
+            });
+            _lastSavedActualPoint = currentLatLng;
+            _lastSavedActualPointAt = DateTime.now();
+          }
+        } catch (e) {
+          // ignore
         }
       }
     }
@@ -387,6 +419,27 @@ class _MapScreenState extends State<MapScreen> {
       });
     } catch (e) {
       // ignore Firestore write errors to not affect UX
+    }
+  }
+
+  Future<void> _saveInitialRouteToFirestore(String encoded, List<LatLng> points) async {
+    if (_activeSessionId == null) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('navigation_sessions')
+          .doc(_activeSessionId)
+          .set({
+        'routePolylineEncodedInitial': encoded,
+        'routePolylinePointsInitial': points
+            .map((p) => {
+                  'lat': p.latitude,
+                  'lng': p.longitude,
+                })
+            .toList(),
+        'routeInitialSavedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      // ignore
     }
   }
 
@@ -582,6 +635,15 @@ class _MapScreenState extends State<MapScreen> {
           _saveNavigationState();
           
           FlutterBackgroundService().startService();
+          // Enable background location updates and tighten update policy for navigation
+          try {
+            await _location.enableBackgroundMode(enable: true);
+            await _location.changeSettings(
+              accuracy: location_pkg.LocationAccuracy.high,
+              interval: 3000,
+              distanceFilter: 10,
+            );
+          } catch (_) {}
           
           // Create Firestore session document
           try {
@@ -610,6 +672,9 @@ class _MapScreenState extends State<MapScreen> {
               if (_lastEncodedPolyline != null && _routePoints.isNotEmpty) {
                 // ignore: unawaited_futures
                 _saveRouteToFirestore(_lastEncodedPolyline!, _routePoints);
+                // Also persist the initial full route once for history
+                // ignore: unawaited_futures
+                _saveInitialRouteToFirestore(_lastEncodedPolyline!, _routePoints);
               }
             }
           } catch (e) {
@@ -658,6 +723,10 @@ class _MapScreenState extends State<MapScreen> {
     
     FlutterBackgroundService().invoke('stopService');
     _hideNavigationNotification();
+    // Disable background mode to save battery
+    // Best-effort; ignore any errors
+    // ignore: unawaited_futures
+    _location.enableBackgroundMode(enable: false);
 
     // Mark Firestore session ended
     if (_activeSessionId != null) {
